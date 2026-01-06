@@ -105,6 +105,10 @@ void SpeakerList::Hide() noexcept
 
 void SpeakerList::Render()
 {
+    // Speaker list and overhead icon rendering disabled
+    // To re-enable, remove the early return below
+    return;
+
     if (!SpeakerList::initStatus || !SpeakerList::showStatus)
         return;
 
