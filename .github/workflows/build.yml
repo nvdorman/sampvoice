@@ -8,32 +8,17 @@ on:
     branches: [ "release-v3.1", "main", "master" ]
   workflow_dispatch:
 
-env:
-  SOLUTION_FILE: sampvoice.sln
-
 jobs:
   # ============================================
-  # Build Client & Server (Windows)
-  # Uses Visual Studio 2019 as per original build instructions
+  # Build Client R1
   # ============================================
-  build-windows:
-    name: Build Windows (${{ matrix.config.name }})
+  build-client-r1:
+    name: Build Client (R1)
     runs-on: windows-2019
-    
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - name: "R1"
-            macro: "SAMP_R1"
-          - name: "R3"  
-            macro: "SAMP_R3"
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        submodules: recursive
     
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1
@@ -49,110 +34,230 @@ jobs:
       if: steps.cache-dxsdk.outputs.cache-hit != 'true'
       shell: powershell
       run: |
-        Write-Host "Installing DirectX SDK..."
         choco install directx-sdk -y --no-progress
-        
-        if (Test-Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)") {
-          Write-Host "DirectX SDK installed successfully"
-        } else {
-          Write-Error "DirectX SDK installation failed!"
-          exit 1
-        }
     
-    - name: Set DXSDK_DIR environment
+    - name: Setup Environment
       shell: powershell
       run: |
         $dxsdkPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
         echo "DXSDK_DIR=$dxsdkPath\" >> $env:GITHUB_ENV
         
-        # Add DirectX SDK utilities (fxc.exe) to PATH
         $dxsdkBinPath = "$dxsdkPath\Utilities\bin\x86"
         $currentPath = [Environment]::GetEnvironmentVariable("PATH", "Process")
         echo "PATH=$dxsdkBinPath;$currentPath" >> $env:GITHUB_ENV
-        
-        Write-Host "DXSDK_DIR set to: $dxsdkPath"
-        Write-Host "Added to PATH: $dxsdkBinPath"
     
-    - name: Build Solution (Release|x86) - ${{ matrix.config.name }}
+    - name: Clean build
       shell: cmd
       run: |
-        echo === Building SAMPVOICE (${{ matrix.config.name }}) ===
-        echo DXSDK_DIR=%DXSDK_DIR%
-        
-        msbuild %SOLUTION_FILE% ^
+        if exist bin rmdir /s /q bin
+        if exist client\bin rmdir /s /q client\bin
+        if exist client\temp rmdir /s /q client\temp
+    
+    - name: Build Client R1
+      shell: cmd
+      run: |
+        echo === Building Client R1 (SAMP_R1) ===
+        msbuild client\client.vcxproj ^
+          /t:Clean;Build ^
           /p:Configuration=Release ^
-          /p:Platform=x86 ^
-          /p:PreprocessorDefinitions="${{ matrix.config.macro }};_WINDLL;NDEBUG;%%(PreprocessorDefinitions)" ^
-          /m ^
-          /v:minimal
+          /p:Platform=Win32 ^
+          /p:PreprocessorDefinitions="SAMP_R1;_WINDLL;NDEBUG" ^
+          /m /v:minimal
     
-    - name: Find build outputs
+    - name: Check output size
       shell: powershell
       run: |
-        Write-Host "=== Searching for build outputs ==="
-        Get-ChildItem -Path . -Include *.asi,*.dll -Recurse -ErrorAction SilentlyContinue | ForEach-Object { 
-          Write-Host $_.FullName 
+        $asiPath = "bin\sampvoice.asi"
+        if (-not (Test-Path $asiPath)) {
+          $asiPath = "client\bin\sampvoice.asi"
+        }
+        if (Test-Path $asiPath) {
+          $size = (Get-Item $asiPath).Length / 1KB
+          Write-Host "sampvoice.asi size: $([math]::Round($size, 2)) KB"
         }
     
-    - name: Create release directory
+    - name: Prepare artifacts
       shell: powershell
       run: |
-        New-Item -ItemType Directory -Force -Path "release\client"
-        New-Item -ItemType Directory -Force -Path "release\server\plugins"
-        New-Item -ItemType Directory -Force -Path "release\server\pawno\include"
+        New-Item -ItemType Directory -Force -Path "output"
         
-        # Copy client ASI
-        if (Test-Path "bin\sampvoice.asi") {
-          Copy-Item "bin\sampvoice.asi" "release\client\"
-          Write-Host "Copied client ASI from bin\"
-        } elseif (Test-Path "client\bin\sampvoice.asi") {
-          Copy-Item "client\bin\sampvoice.asi" "release\client\"
-          Write-Host "Copied client ASI from client\bin\"
+        $asiPath = "bin\sampvoice.asi"
+        if (-not (Test-Path $asiPath)) {
+          $asiPath = "client\bin\sampvoice.asi"
         }
         
-        # Copy server DLL
-        if (Test-Path "bin\sampvoice.dll") {
-          Copy-Item "bin\sampvoice.dll" "release\server\plugins\"
-          Write-Host "Copied server DLL from bin\"
-        } elseif (Test-Path "server\bin\sampvoice.dll") {
-          Copy-Item "server\bin\sampvoice.dll" "release\server\plugins\"
-          Write-Host "Copied server DLL from server\bin\"
+        if (Test-Path $asiPath) {
+          Copy-Item $asiPath "output\sampvoice.asi"
         }
         
-        # Copy include file
-        Copy-Item "server\sampvoice.inc" "release\server\pawno\include\"
-        
-        # Copy required DLLs for client
+        # Copy required DLLs
         if (Test-Path "setup\files") {
-          Copy-Item "setup\files\*.dll" "release\client\" -ErrorAction SilentlyContinue
+          Copy-Item "setup\files\bass.dll" "output\" -ErrorAction SilentlyContinue
+          Copy-Item "setup\files\bass_fx.dll" "output\" -ErrorAction SilentlyContinue
         }
     
-    - name: Upload Client Artifact
+    - name: Upload Client R1
       uses: actions/upload-artifact@v4
       with:
-        name: sv_client_037_${{ matrix.config.name }}_windows
-        path: release/client/
-        if-no-files-found: warn
+        name: sv_client_037_r1
+        path: output/
+        if-no-files-found: error
+
+  # ============================================
+  # Build Client R3
+  # ============================================
+  build-client-r3:
+    name: Build Client (R3)
+    runs-on: windows-2019
     
-    - name: Upload Server Artifact (Windows)
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1
+    
+    - name: Cache DirectX SDK
+      id: cache-dxsdk
+      uses: actions/cache@v4
+      with:
+        path: C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)
+        key: directx-sdk-june2010
+    
+    - name: Install DirectX SDK
+      if: steps.cache-dxsdk.outputs.cache-hit != 'true'
+      shell: powershell
+      run: |
+        choco install directx-sdk -y --no-progress
+    
+    - name: Setup Environment
+      shell: powershell
+      run: |
+        $dxsdkPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
+        echo "DXSDK_DIR=$dxsdkPath\" >> $env:GITHUB_ENV
+        
+        $dxsdkBinPath = "$dxsdkPath\Utilities\bin\x86"
+        $currentPath = [Environment]::GetEnvironmentVariable("PATH", "Process")
+        echo "PATH=$dxsdkBinPath;$currentPath" >> $env:GITHUB_ENV
+    
+    - name: Clean build
+      shell: cmd
+      run: |
+        if exist bin rmdir /s /q bin
+        if exist client\bin rmdir /s /q client\bin
+        if exist client\temp rmdir /s /q client\temp
+    
+    - name: Build Client R3
+      shell: cmd
+      run: |
+        echo === Building Client R3 (SAMP_R3) ===
+        msbuild client\client.vcxproj ^
+          /t:Clean;Build ^
+          /p:Configuration=Release ^
+          /p:Platform=Win32 ^
+          /p:PreprocessorDefinitions="SAMP_R3;_WINDLL;NDEBUG" ^
+          /m /v:minimal
+    
+    - name: Check output size
+      shell: powershell
+      run: |
+        $asiPath = "bin\sampvoice.asi"
+        if (-not (Test-Path $asiPath)) {
+          $asiPath = "client\bin\sampvoice.asi"
+        }
+        if (Test-Path $asiPath) {
+          $size = (Get-Item $asiPath).Length / 1KB
+          Write-Host "sampvoice.asi size: $([math]::Round($size, 2)) KB"
+        }
+    
+    - name: Prepare artifacts
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Force -Path "output"
+        
+        $asiPath = "bin\sampvoice.asi"
+        if (-not (Test-Path $asiPath)) {
+          $asiPath = "client\bin\sampvoice.asi"
+        }
+        
+        if (Test-Path $asiPath) {
+          Copy-Item $asiPath "output\sampvoice.asi"
+        }
+        
+        # Copy required DLLs
+        if (Test-Path "setup\files") {
+          Copy-Item "setup\files\bass.dll" "output\" -ErrorAction SilentlyContinue
+          Copy-Item "setup\files\bass_fx.dll" "output\" -ErrorAction SilentlyContinue
+        }
+    
+    - name: Upload Client R3
       uses: actions/upload-artifact@v4
       with:
-        name: sv_server_037_windows
-        path: release/server/
+        name: sv_client_037_r3
+        path: output/
+        if-no-files-found: error
+
+  # ============================================
+  # Build Server (Windows)
+  # ============================================
+  build-server-win:
+    name: Build Server (Windows)
+    runs-on: windows-2019
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1
+    
+    - name: Clean and Build Server
+      shell: cmd
+      run: |
+        if exist bin rmdir /s /q bin
+        if exist server\bin rmdir /s /q server\bin
+        if exist server\temp rmdir /s /q server\temp
+        
+        msbuild server\server.vcxproj ^
+          /t:Clean;Build ^
+          /p:Configuration=Release ^
+          /p:Platform=Win32 ^
+          /m /v:minimal
+    
+    - name: Prepare artifacts
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Force -Path "output\plugins"
+        New-Item -ItemType Directory -Force -Path "output\pawno\include"
+        
+        $dllPath = "bin\sampvoice.dll"
+        if (-not (Test-Path $dllPath)) {
+          $dllPath = "server\bin\sampvoice.dll"
+        }
+        
+        if (Test-Path $dllPath) {
+          Copy-Item $dllPath "output\plugins\"
+        }
+        
+        Copy-Item "server\sampvoice.inc" "output\pawno\include\"
+    
+    - name: Upload Server Windows
+      uses: actions/upload-artifact@v4
+      with:
+        name: sv_server_037_win32
+        path: output/
         if-no-files-found: warn
 
   # ============================================
   # Build Server (Linux)
   # ============================================
-  build-linux-server:
+  build-server-linux:
     name: Build Server (Linux)
     runs-on: ubuntu-20.04
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        submodules: recursive
     
     - name: Install dependencies
       run: |
@@ -163,105 +268,71 @@ jobs:
       working-directory: server
       run: make
     
-    - name: Create release directory
+    - name: Prepare artifacts
       run: |
-        mkdir -p release/plugins
-        mkdir -p release/pawno/include
+        mkdir -p output/plugins
+        mkdir -p output/pawno/include
         
-        cp server/sampvoice.so release/plugins/
-        cp server/sampvoice.inc release/pawno/include/
+        cp server/sampvoice.so output/plugins/
+        cp server/sampvoice.inc output/pawno/include/
     
-    - name: Upload Server Artifact (Linux)
+    - name: Upload Server Linux
       uses: actions/upload-artifact@v4
       with:
         name: sv_server_037_linux
-        path: release/
+        path: output/
         if-no-files-found: warn
 
   # ============================================
-  # Package Release
-  # ============================================
-  package:
-    name: Package Release
-    runs-on: ubuntu-latest
-    needs: [build-windows, build-linux-server]
-    if: always()
-    
-    steps:
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts/
-    
-    - name: List artifacts
-      run: |
-        echo "=== Downloaded artifacts ==="
-        find artifacts/ -type f
-    
-    - name: Create release packages
-      run: |
-        mkdir -p release
-        
-        # Package client R1
-        if [ -d "artifacts/sv_client_037_R1_windows" ]; then
-          cd artifacts/sv_client_037_R1_windows
-          zip -r ../../release/sv_client_037_r1.zip .
-          cd ../..
-        fi
-        
-        # Package client R3
-        if [ -d "artifacts/sv_client_037_R3_windows" ]; then
-          cd artifacts/sv_client_037_R3_windows
-          zip -r ../../release/sv_client_037_r3.zip .
-          cd ../..
-        fi
-        
-        # Package server Windows
-        if [ -d "artifacts/sv_server_037_windows" ]; then
-          cd artifacts/sv_server_037_windows
-          zip -r ../../release/sv_server_037_win32.zip .
-          cd ../..
-        fi
-        
-        # Package server Linux
-        if [ -d "artifacts/sv_server_037_linux" ]; then
-          cd artifacts/sv_server_037_linux
-          zip -r ../../release/sv_server_037_linux.zip .
-          cd ../..
-        fi
-        
-        echo "=== Release packages ==="
-        ls -la release/
-    
-    - name: Upload combined release
-      uses: actions/upload-artifact@v4
-      with:
-        name: sampvoice-release
-        path: release/
-        if-no-files-found: warn
-
-  # ============================================
-  # Create GitHub Release
+  # Create Release
   # ============================================
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [package]
+    needs: [build-client-r1, build-client-r3, build-server-win, build-server-linux]
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
-    - name: Download release packages
+    - name: Download R1
       uses: actions/download-artifact@v4
       with:
-        name: sampvoice-release
-        path: release/
+        name: sv_client_037_r1
+        path: sv_client_037_r1/
+    
+    - name: Download R3
+      uses: actions/download-artifact@v4
+      with:
+        name: sv_client_037_r3
+        path: sv_client_037_r3/
+    
+    - name: Download Server Win
+      uses: actions/download-artifact@v4
+      with:
+        name: sv_server_037_win32
+        path: sv_server_037_win32/
+      continue-on-error: true
+    
+    - name: Download Server Linux
+      uses: actions/download-artifact@v4
+      with:
+        name: sv_server_037_linux
+        path: sv_server_037_linux/
+      continue-on-error: true
+    
+    - name: Create ZIPs
+      run: |
+        zip -r sv_client_037_r1.zip sv_client_037_r1/
+        zip -r sv_client_037_r3.zip sv_client_037_r3/
+        [ -d sv_server_037_win32 ] && zip -r sv_server_037.zip sv_server_037_win32/ sv_server_037_linux/ || true
     
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        files: release/*
+        files: |
+          sv_client_037_r1.zip
+          sv_client_037_r3.zip
+          sv_server_037.zip
         draft: false
         prerelease: false
-        generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
