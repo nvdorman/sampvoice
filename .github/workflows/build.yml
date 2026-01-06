@@ -10,8 +10,18 @@ on:
 
 jobs:
   build-client:
-    name: Build Client (Windows)
-    runs-on: windows-2022
+    name: Build Client (${{ matrix.samp_version }})
+    runs-on: windows-2019
+    
+    strategy:
+      matrix:
+        include:
+          - samp_version: "R1"
+            samp_macro: "SAMP_R1"
+            output_name: "sampvoice_r1"
+          - samp_version: "R3"
+            samp_macro: "SAMP_R3"
+            output_name: "sampvoice_r3"
     
     steps:
     - name: Checkout repository
@@ -26,13 +36,14 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x86
+        toolset: 14.29
     
     - name: Cache DirectX SDK
       id: cache-dxsdk
       uses: actions/cache@v4
       with:
         path: C:\DXSDK
-        key: directx-sdk-june2010-v3
+        key: directx-sdk-june2010-v4
     
     - name: Install DirectX SDK
       if: steps.cache-dxsdk.outputs.cache-hit != 'true'
@@ -48,15 +59,6 @@ jobs:
         } else {
           Write-Error "DirectX SDK installation failed!"
           exit 1
-        }
-    
-    - name: Restore DirectX SDK from cache
-      if: steps.cache-dxsdk.outputs.cache-hit == 'true'
-      shell: powershell
-      run: |
-        Write-Host "Restoring DirectX SDK from cache..."
-        if (-not (Test-Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)")) {
-          Copy-Item -Path "C:\DXSDK" -Destination "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)" -Recurse -Force
         }
     
     - name: Setup Environment Variables
@@ -87,68 +89,116 @@ jobs:
       shell: cmd
       run: if not exist "bin" mkdir bin
     
-    - name: Build Client
+    - name: Build Client (${{ matrix.samp_version }})
       shell: cmd
       run: |
-        echo === Build Environment ===
-        echo DXSDK_DIR=%DXSDK_DIR%
+        echo === Build Configuration ===
+        echo SAMP Version: ${{ matrix.samp_version }}
+        echo Macro: ${{ matrix.samp_macro }}
+        echo DXSDK_DIR: %DXSDK_DIR%
         
         echo === Building SAMPVOICE Client ===
         msbuild client/client.vcxproj ^
           /p:Configuration=Release ^
           /p:Platform=Win32 ^
-          /p:PlatformToolset=v143 ^
+          /p:PlatformToolset=v142 ^
           /p:WindowsTargetPlatformVersion=10.0 ^
-          /p:VCToolsVersion= ^
+          /p:PreprocessorDefinitions="${{ matrix.samp_macro }};_WINDLL;NDEBUG;%%(PreprocessorDefinitions)" ^
           /p:UseEnv=true ^
           /m ^
-          /v:normal
+          /v:minimal
     
-    - name: Find output files
-      if: always()
+    - name: Rename output file
       shell: powershell
       run: |
-        Write-Host "=== Searching for output files ==="
-        Get-ChildItem -Path . -Include *.asi,*.dll -Recurse | ForEach-Object { Write-Host $_.FullName }
-        
-        if (Test-Path "client/bin") {
-          Write-Host "=== Contents of client/bin folder ==="
-          Get-ChildItem -Path "client/bin" -Recurse
+        if (Test-Path "client/bin/sampvoice.asi") {
+          Copy-Item "client/bin/sampvoice.asi" "client/bin/${{ matrix.output_name }}.asi"
+          Write-Host "Renamed to ${{ matrix.output_name }}.asi"
         }
     
     - name: Upload Client Artifact
       uses: actions/upload-artifact@v4
-      if: success()
       with:
-        name: sampvoice-client-windows
-        path: client/bin/sampvoice.asi
+        name: sampvoice-client-${{ matrix.samp_version }}
+        path: |
+          client/bin/sampvoice.asi
+          client/bin/${{ matrix.output_name }}.asi
         if-no-files-found: error
 
-  release:
-    name: Create Release
+  package:
+    name: Package All Builds
     runs-on: ubuntu-latest
     needs: [build-client]
-    if: startsWith(github.ref, 'refs/tags/')
     
     steps:
     - name: Checkout
       uses: actions/checkout@v4
     
-    - name: Download artifacts
+    - name: Download R1 artifact
       uses: actions/download-artifact@v4
       with:
-        name: sampvoice-client-windows
-        path: release/
+        name: sampvoice-client-R1
+        path: artifacts/r1/
     
-    - name: Create ZIP
+    - name: Download R3 artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: sampvoice-client-R3
+        path: artifacts/r3/
+    
+    - name: Create packages
       run: |
+        mkdir -p release
+        
+        # Create R1 package
+        mkdir -p release/sv_client_037_r1
+        cp artifacts/r1/sampvoice.asi release/sv_client_037_r1/ 2>/dev/null || cp artifacts/r1/sampvoice_r1.asi release/sv_client_037_r1/sampvoice.asi
+        
+        # Create R3 package
+        mkdir -p release/sv_client_037_r3
+        cp artifacts/r3/sampvoice.asi release/sv_client_037_r3/ 2>/dev/null || cp artifacts/r3/sampvoice_r3.asi release/sv_client_037_r3/sampvoice.asi
+        
+        # Copy required DLLs from setup/files
+        if [ -d "setup/files" ]; then
+          cp setup/files/*.dll release/sv_client_037_r1/ 2>/dev/null || true
+          cp setup/files/*.dll release/sv_client_037_r3/ 2>/dev/null || true
+        fi
+        
+        # Create ZIP files
         cd release
-        zip -r ../sampvoice-client-${{ github.ref_name }}.zip .
+        zip -r ../sv_client_037_r1.zip sv_client_037_r1/
+        zip -r ../sv_client_037_r3.zip sv_client_037_r3/
+        
+        echo "=== Package contents ==="
+        ls -la ../sv_client_037_r1.zip ../sv_client_037_r3.zip
+    
+    - name: Upload combined package
+      uses: actions/upload-artifact@v4
+      with:
+        name: sampvoice-all-clients
+        path: |
+          sv_client_037_r1.zip
+          sv_client_037_r3.zip
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [package]
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download packages
+      uses: actions/download-artifact@v4
+      with:
+        name: sampvoice-all-clients
+        path: release/
     
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        files: sampvoice-client-${{ github.ref_name }}.zip
+        files: |
+          release/sv_client_037_r1.zip
+          release/sv_client_037_r3.zip
         draft: false
         prerelease: false
         generate_release_notes: true
