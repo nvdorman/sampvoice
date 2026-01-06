@@ -9,9 +9,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ============================================
-  # Build Client (Windows Only - ASI Plugin)
-  # ============================================
   build-client:
     name: Build Client (Windows)
     runs-on: windows-2022
@@ -25,95 +22,97 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
     
+    - name: Setup Visual Studio Dev Environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x86
+    
     - name: Cache DirectX SDK
       id: cache-dxsdk
       uses: actions/cache@v4
       with:
         path: C:\DXSDK
-        key: directx-sdk-june2010-v2
+        key: directx-sdk-june2010-v3
     
-    - name: Install DirectX SDK via Chocolatey
+    - name: Install DirectX SDK
       if: steps.cache-dxsdk.outputs.cache-hit != 'true'
       shell: powershell
       run: |
         Write-Host "Installing DirectX SDK via Chocolatey..."
         choco install directx-sdk -y --no-progress
         
-        # Verify installation
-        if (Test-Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)") {
+        $srcPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
+        if (Test-Path $srcPath) {
           Write-Host "DirectX SDK installed successfully"
-          # Copy to cache location
-          Copy-Item -Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)" -Destination "C:\DXSDK" -Recurse -Force
+          Copy-Item -Path $srcPath -Destination "C:\DXSDK" -Recurse -Force
         } else {
-          Write-Host "DirectX SDK installation path not found, checking alternatives..."
-          Get-ChildItem "C:\Program Files (x86)" | Where-Object { $_.Name -like "*DirectX*" }
-        }
-    
-    - name: Setup DirectX SDK Environment
-      shell: powershell
-      run: |
-        # Check cache location first
-        if (Test-Path "C:\DXSDK") {
-          $dxsdkPath = "C:\DXSDK"
-        } elseif (Test-Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)") {
-          $dxsdkPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
-        } else {
-          Write-Error "DirectX SDK not found!"
+          Write-Error "DirectX SDK installation failed!"
           exit 1
         }
+    
+    - name: Restore DirectX SDK from cache
+      if: steps.cache-dxsdk.outputs.cache-hit == 'true'
+      shell: powershell
+      run: |
+        Write-Host "Restoring DirectX SDK from cache..."
+        if (-not (Test-Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)")) {
+          Copy-Item -Path "C:\DXSDK" -Destination "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)" -Recurse -Force
+        }
+    
+    - name: Setup Environment Variables
+      shell: powershell
+      run: |
+        $dxsdkPath = "C:\DXSDK"
+        if (-not (Test-Path $dxsdkPath)) {
+          $dxsdkPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
+        }
         
-        Write-Host "Using DirectX SDK from: $dxsdkPath"
+        Write-Host "DXSDK Path: $dxsdkPath"
         echo "DXSDK_DIR=$dxsdkPath\" >> $env:GITHUB_ENV
-        
-        # Also add to include/lib paths
-        echo "DXSDK_INCLUDE=$dxsdkPath\Include" >> $env:GITHUB_ENV
-        echo "DXSDK_LIB=$dxsdkPath\Lib\x86" >> $env:GITHUB_ENV
     
     - name: Create output directory
       shell: cmd
-      run: |
-        if not exist "bin" mkdir bin
+      run: if not exist "bin" mkdir bin
     
-    - name: Build Client (Release|Win32)
-      working-directory: ${{github.workspace}}
+    - name: Build Client
       shell: cmd
       run: |
-        echo Building SAMPVOICE Client...
+        echo === Build Environment ===
         echo DXSDK_DIR=%DXSDK_DIR%
         
+        echo === Building SAMPVOICE Client ===
         msbuild client/client.vcxproj ^
           /p:Configuration=Release ^
           /p:Platform=Win32 ^
           /p:PlatformToolset=v143 ^
-          /p:WindowsTargetPlatformVersion=10.0.22621.0 ^
-          /p:IncludePath="%DXSDK_INCLUDE%;$(IncludePath)" ^
-          /p:LibraryPath="%DXSDK_LIB%;$(LibraryPath)" ^
+          /p:WindowsTargetPlatformVersion=10.0 ^
+          /p:VCToolsVersion= ^
+          /p:UseEnv=true ^
           /m ^
-          /v:minimal
+          /v:normal
     
-    - name: List output files
-      shell: cmd
+    - name: Find output files
+      if: always()
+      shell: powershell
       run: |
-        echo === Checking bin directory ===
-        if exist bin dir /s bin
-        echo === Checking for ASI files ===
-        dir /s *.asi 2>nul || echo No ASI files found
-        echo === Checking for DLL files ===
-        dir /s *.dll 2>nul || echo No DLL files found
+        Write-Host "=== Searching for output files ==="
+        Get-ChildItem -Path . -Include *.asi,*.dll -Recurse | ForEach-Object { Write-Host $_.FullName }
+        
+        if (Test-Path "bin") {
+          Write-Host "=== Contents of bin folder ==="
+          Get-ChildItem -Path "bin" -Recurse
+        }
     
     - name: Upload Client Artifact
       uses: actions/upload-artifact@v4
+      if: success()
       with:
         name: sampvoice-client-windows
         path: |
           bin/sampvoice.asi
           bin/*.asi
-          bin/*.dll
         if-no-files-found: warn
 
-  # ============================================
-  # Create Release Package
-  # ============================================
   release:
     name: Create Release
     runs-on: ubuntu-latest
@@ -121,16 +120,16 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
     
-    - name: Download client artifact
+    - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
         name: sampvoice-client-windows
         path: release/
     
-    - name: Create release package
+    - name: Create ZIP
       run: |
         cd release
         zip -r ../sampvoice-client-${{ github.ref_name }}.zip .
