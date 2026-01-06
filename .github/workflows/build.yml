@@ -66,7 +66,7 @@ jobs:
         echo "DXSDK_DIR=$dxsdkPath\" >> $env:GITHUB_ENV
         Write-Host "DXSDK_DIR set to: $dxsdkPath"
     
-    - name: Build Solution (Release|Win32) - ${{ matrix.config.name }}
+    - name: Build Solution (Release|x86) - ${{ matrix.config.name }}
       shell: cmd
       run: |
         echo === Building SAMPVOICE (${{ matrix.config.name }}) ===
@@ -74,7 +74,7 @@ jobs:
         
         msbuild %SOLUTION_FILE% ^
           /p:Configuration=Release ^
-          /p:Platform=Win32 ^
+          /p:Platform=x86 ^
           /p:PreprocessorDefinitions="${{ matrix.config.macro }};_WINDLL;NDEBUG;%%(PreprocessorDefinitions)" ^
           /m ^
           /v:minimal
