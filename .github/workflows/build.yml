@@ -1,4 +1,4 @@
-name: Build SAMPVOICE
+name: Build SAMPVOICE Client
 
 on:
   push:
@@ -7,9 +7,6 @@ on:
   pull_request:
     branches: [ "release-v3.1", "main", "master" ]
   workflow_dispatch:
-
-env:
-  SOLUTION_FILE: sampvoice.sln
 
 jobs:
   # ============================================
@@ -28,167 +25,120 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
     
-    - name: Install DirectX SDK
+    - name: Cache DirectX SDK
+      id: cache-dxsdk
+      uses: actions/cache@v4
+      with:
+        path: C:\DXSDK
+        key: directx-sdk-june2010-v2
+    
+    - name: Install DirectX SDK via Chocolatey
+      if: steps.cache-dxsdk.outputs.cache-hit != 'true'
       shell: powershell
       run: |
-        # Download DirectX SDK June 2010
-        $url = "https://download.microsoft.com/download/A/E/7/AE743F1F-632B-4809-87A9-AA1BB3458E31/DXSDK_Jun10.exe"
-        $output = "$env:TEMP\DXSDK_Jun10.exe"
-        Write-Host "Downloading DirectX SDK..."
-        Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
+        Write-Host "Installing DirectX SDK via Chocolatey..."
+        choco install directx-sdk -y --no-progress
         
-        # Extract (silent install)
-        Write-Host "Installing DirectX SDK..."
-        Start-Process -FilePath $output -ArgumentList "/U" -Wait
-        
-        # Set environment variable
-        echo "DXSDK_DIR=C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)\" >> $env:GITHUB_ENV
+        # Verify installation
+        if (Test-Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)") {
+          Write-Host "DirectX SDK installed successfully"
+          # Copy to cache location
+          Copy-Item -Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)" -Destination "C:\DXSDK" -Recurse -Force
+        } else {
+          Write-Host "DirectX SDK installation path not found, checking alternatives..."
+          Get-ChildItem "C:\Program Files (x86)" | Where-Object { $_.Name -like "*DirectX*" }
+        }
     
-    - name: Setup Visual Studio Build Tools
+    - name: Setup DirectX SDK Environment
+      shell: powershell
+      run: |
+        # Check cache location first
+        if (Test-Path "C:\DXSDK") {
+          $dxsdkPath = "C:\DXSDK"
+        } elseif (Test-Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)") {
+          $dxsdkPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
+        } else {
+          Write-Error "DirectX SDK not found!"
+          exit 1
+        }
+        
+        Write-Host "Using DirectX SDK from: $dxsdkPath"
+        echo "DXSDK_DIR=$dxsdkPath\" >> $env:GITHUB_ENV
+        
+        # Also add to include/lib paths
+        echo "DXSDK_INCLUDE=$dxsdkPath\Include" >> $env:GITHUB_ENV
+        echo "DXSDK_LIB=$dxsdkPath\Lib\x86" >> $env:GITHUB_ENV
+    
+    - name: Create output directory
       shell: cmd
       run: |
-        :: Install v141_xp toolset component if needed
-        echo Installing required VS components...
+        if not exist "bin" mkdir bin
     
     - name: Build Client (Release|Win32)
       working-directory: ${{github.workspace}}
       shell: cmd
       run: |
-        :: Try building with v142 toolset (more compatible with GitHub Actions)
-        msbuild client/client.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m
-      continue-on-error: true
+        echo Building SAMPVOICE Client...
+        echo DXSDK_DIR=%DXSDK_DIR%
+        
+        msbuild client/client.vcxproj ^
+          /p:Configuration=Release ^
+          /p:Platform=Win32 ^
+          /p:PlatformToolset=v143 ^
+          /p:WindowsTargetPlatformVersion=10.0.22621.0 ^
+          /p:IncludePath="%DXSDK_INCLUDE%;$(IncludePath)" ^
+          /p:LibraryPath="%DXSDK_LIB%;$(LibraryPath)" ^
+          /m ^
+          /v:minimal
     
-    - name: Build Client (Fallback - v142)
-      if: failure()
-      working-directory: ${{github.workspace}}
+    - name: List output files
       shell: cmd
       run: |
-        msbuild client/client.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v142 /p:WindowsTargetPlatformVersion=10.0 /m
+        echo === Checking bin directory ===
+        if exist bin dir /s bin
+        echo === Checking for ASI files ===
+        dir /s *.asi 2>nul || echo No ASI files found
+        echo === Checking for DLL files ===
+        dir /s *.dll 2>nul || echo No DLL files found
     
     - name: Upload Client Artifact
       uses: actions/upload-artifact@v4
       with:
         name: sampvoice-client-windows
-        path: bin/sampvoice.asi
-        if-no-files-found: warn
-
-  # ============================================
-  # Build Server (Windows)
-  # ============================================
-  build-server-windows:
-    name: Build Server (Windows)
-    runs-on: windows-2022
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
-    
-    - name: Create output directory
-      run: mkdir -p bin
-      shell: bash
-    
-    - name: Build Server (Release|Win32)
-      working-directory: ${{github.workspace}}
-      shell: cmd
-      run: |
-        msbuild server/server.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m
-    
-    - name: Upload Server Artifact (Windows)
-      uses: actions/upload-artifact@v4
-      with:
-        name: sampvoice-server-windows
-        path: bin/sampvoice.dll
-        if-no-files-found: warn
-
-  # ============================================
-  # Build Server (Linux)
-  # ============================================
-  build-server-linux:
-    name: Build Server (Linux)
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    
-    - name: Install dependencies
-      run: |
-        sudo dpkg --add-architecture i386
-        sudo apt-get update
-        sudo apt-get install -y \
-          g++-multilib \
-          gcc-multilib \
-          lib32stdc++6 \
-          libc6-dev-i386 \
-          make
-    
-    - name: Build Server
-      working-directory: ${{github.workspace}}/server
-      run: |
-        make clean 2>/dev/null || true
-        make
-    
-    - name: Upload Server Artifact (Linux)
-      uses: actions/upload-artifact@v4
-      with:
-        name: sampvoice-server-linux
-        path: server/sampvoice.so
+        path: |
+          bin/sampvoice.asi
+          bin/*.asi
+          bin/*.dll
         if-no-files-found: warn
 
   # ============================================
   # Create Release Package
   # ============================================
-  package:
-    name: Package Release
+  release:
+    name: Create Release
     runs-on: ubuntu-latest
-    needs: [build-client, build-server-windows, build-server-linux]
+    needs: [build-client]
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
     
-    - name: Download all artifacts
+    - name: Download client artifact
       uses: actions/download-artifact@v4
       with:
-        path: artifacts
+        name: sampvoice-client-windows
+        path: release/
     
     - name: Create release package
       run: |
-        mkdir -p release/client
-        mkdir -p release/server/plugins
-        mkdir -p release/server/pawno/include
-        
-        # Copy client files
-        cp artifacts/sampvoice-client-windows/sampvoice.asi release/client/ 2>/dev/null || echo "Client ASI not found"
-        
-        # Copy server files (Windows)
-        cp artifacts/sampvoice-server-windows/sampvoice.dll release/server/plugins/ 2>/dev/null || echo "Windows server DLL not found"
-        
-        # Copy server files (Linux)
-        cp artifacts/sampvoice-server-linux/sampvoice.so release/server/plugins/ 2>/dev/null || echo "Linux server SO not found"
-        
-        # Copy include file
-        cp server/sampvoice.inc release/server/pawno/include/
-        
-        # Create archives
         cd release
-        zip -r ../sampvoice-client-${{ github.ref_name }}.zip client/
-        zip -r ../sampvoice-server-${{ github.ref_name }}.zip server/
+        zip -r ../sampvoice-client-${{ github.ref_name }}.zip .
     
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        files: |
-          sampvoice-client-${{ github.ref_name }}.zip
-          sampvoice-server-${{ github.ref_name }}.zip
+        files: sampvoice-client-${{ github.ref_name }}.zip
         draft: false
         prerelease: false
         generate_release_notes: true
