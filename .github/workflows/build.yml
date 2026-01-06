@@ -111,9 +111,9 @@ jobs:
         Write-Host "=== Searching for output files ==="
         Get-ChildItem -Path . -Include *.asi,*.dll -Recurse | ForEach-Object { Write-Host $_.FullName }
         
-        if (Test-Path "bin") {
-          Write-Host "=== Contents of bin folder ==="
-          Get-ChildItem -Path "bin" -Recurse
+        if (Test-Path "client/bin") {
+          Write-Host "=== Contents of client/bin folder ==="
+          Get-ChildItem -Path "client/bin" -Recurse
         }
     
     - name: Upload Client Artifact
@@ -121,10 +121,8 @@ jobs:
       if: success()
       with:
         name: sampvoice-client-windows
-        path: |
-          bin/sampvoice.asi
-          bin/*.asi
-        if-no-files-found: warn
+        path: client/bin/sampvoice.asi
+        if-no-files-found: error
 
   release:
     name: Create Release
