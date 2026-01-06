@@ -23,18 +23,22 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1
     
-    - name: Cache DirectX SDK
-      id: cache-dxsdk
-      uses: actions/cache@v4
-      with:
-        path: C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)
-        key: directx-sdk-june2010
-    
     - name: Install DirectX SDK
-      if: steps.cache-dxsdk.outputs.cache-hit != 'true'
       shell: powershell
       run: |
+        $dxsdkPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
+        $fxcPath = "$dxsdkPath\Utilities\bin\x86\fxc.exe"
+        
+        Write-Host "Installing DirectX SDK..."
         choco install directx-sdk -y --no-progress
+        
+        # Verify installation
+        if (Test-Path $fxcPath) {
+          Write-Host "fxc.exe found at: $fxcPath"
+        } else {
+          Write-Error "fxc.exe not found after installation!"
+          exit 1
+        }
     
     - name: Setup Environment
       shell: powershell
@@ -117,18 +121,22 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1
     
-    - name: Cache DirectX SDK
-      id: cache-dxsdk
-      uses: actions/cache@v4
-      with:
-        path: C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)
-        key: directx-sdk-june2010
-    
     - name: Install DirectX SDK
-      if: steps.cache-dxsdk.outputs.cache-hit != 'true'
       shell: powershell
       run: |
+        $dxsdkPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
+        $fxcPath = "$dxsdkPath\Utilities\bin\x86\fxc.exe"
+        
+        Write-Host "Installing DirectX SDK..."
         choco install directx-sdk -y --no-progress
+        
+        # Verify installation
+        if (Test-Path $fxcPath) {
+          Write-Host "fxc.exe found at: $fxcPath"
+        } else {
+          Write-Error "fxc.exe not found after installation!"
+          exit 1
+        }
     
     - name: Setup Environment
       shell: powershell
