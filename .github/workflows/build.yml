@@ -69,6 +69,19 @@ jobs:
         
         Write-Host "DXSDK Path: $dxsdkPath"
         echo "DXSDK_DIR=$dxsdkPath\" >> $env:GITHUB_ENV
+        
+        # Add DirectX SDK to INCLUDE and LIB paths
+        $currentInclude = $env:INCLUDE
+        $currentLib = $env:LIB
+        
+        $newInclude = "$dxsdkPath\Include;$currentInclude"
+        $newLib = "$dxsdkPath\Lib\x86;$currentLib"
+        
+        echo "INCLUDE=$newInclude" >> $env:GITHUB_ENV
+        echo "LIB=$newLib" >> $env:GITHUB_ENV
+        
+        Write-Host "Added DirectX SDK Include: $dxsdkPath\Include"
+        Write-Host "Added DirectX SDK Lib: $dxsdkPath\Lib\x86"
     
     - name: Create output directory
       shell: cmd
