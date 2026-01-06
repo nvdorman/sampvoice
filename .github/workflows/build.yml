@@ -64,7 +64,14 @@ jobs:
       run: |
         $dxsdkPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
         echo "DXSDK_DIR=$dxsdkPath\" >> $env:GITHUB_ENV
+        
+        # Add DirectX SDK utilities (fxc.exe) to PATH
+        $dxsdkBinPath = "$dxsdkPath\Utilities\bin\x86"
+        $currentPath = [Environment]::GetEnvironmentVariable("PATH", "Process")
+        echo "PATH=$dxsdkBinPath;$currentPath" >> $env:GITHUB_ENV
+        
         Write-Host "DXSDK_DIR set to: $dxsdkPath"
+        Write-Host "Added to PATH: $dxsdkBinPath"
     
     - name: Build Solution (Release|x86) - ${{ matrix.config.name }}
       shell: cmd
